@@ -20,21 +20,21 @@ from leptonai.photon import Photon, StaticFiles
 from leptonai.photon.types import to_bool
 from leptonai.api.workspace import WorkspaceInfoLocalRecord
 from leptonai.util import tool
+from leptonai.client import Client, local
+from pathway.xpacks.llm.vector_store import VectorStoreClient
 
 ################################################################################
 # Constant values for the RAG model.
 ################################################################################
 
 # Search engine related. You don't really need to change this.
-BING_SEARCH_V7_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search"
-BING_MKT = "en-US"
-GOOGLE_SEARCH_ENDPOINT = "https://customsearch.googleapis.com/customsearch/v1"
 SERPER_SEARCH_ENDPOINT = "https://google.serper.dev/search"
-SEARCHAPI_SEARCH_ENDPOINT = "https://www.searchapi.io/api/v1/search"
+
 
 # Specify the number of references from the search engine you want to use.
 # 8 is usually a good number.
 REFERENCE_COUNT = 8
+PATHWAY_PORT = 8765
 
 # Specify the default timeout for the search engine. If the search engine
 # does not respond within this time, we will return an error.
@@ -49,7 +49,7 @@ _default_query = "Who said 'live long and prosper'?"
 # behave differently, and we haven't tuned the prompt to make it optimal - this
 # is left to you, application creators, as an open problem.
 _rag_query_text = """
-You are a large language AI assistant built by Lepton AI. You are given a user question, and please write clean, concise and accurate answer to the question. You will be given a set of related contexts to the question, each starting with a reference number like [[citation:x]], where x is a number. Please use the context and cite the context at the end of each sentence if applicable.
+You are a large language AI assistant named Labeeb. You are given a user question, and please write clean, concise and accurate answer to the question. You will be given a set of related contexts to the question, each starting with a reference number like [[citation:x]], where x is a number. Please use the context and cite the context at the end of each sentence if applicable.
 
 Your answer must be correct, accurate and written by an expert using an unbiased and professional tone. Please limit to 1024 tokens. Do not give any information that is not related to the question, and do not repeat. Say "information is missing on" followed by the related topic, if the given context do not provide sufficient information.
 
@@ -92,55 +92,6 @@ Here are the contexts of the question:
 
 Remember, based on the original question and related contexts, suggest three such further questions. Do NOT repeat the original question. Each related question should be no longer than 20 words. Here is the original question:
 """
-
-
-def search_with_bing(query: str, subscription_key: str):
-    """
-    Search with bing and return the contexts.
-    """
-    params = {"q": query, "mkt": BING_MKT}
-    response = requests.get(
-        BING_SEARCH_V7_ENDPOINT,
-        headers={"Ocp-Apim-Subscription-Key": subscription_key},
-        params=params,
-        timeout=DEFAULT_SEARCH_ENGINE_TIMEOUT,
-    )
-    if not response.ok:
-        logger.error(f"{response.status_code} {response.text}")
-        raise HTTPException(response.status_code, "Search engine error.")
-    json_content = response.json()
-    try:
-        contexts = json_content["webPages"]["value"][:REFERENCE_COUNT]
-    except KeyError:
-        logger.error(f"Error encountered: {json_content}")
-        return []
-    return contexts
-
-
-def search_with_google(query: str, subscription_key: str, cx: str):
-    """
-    Search with google and return the contexts.
-    """
-    params = {
-        "key": subscription_key,
-        "cx": cx,
-        "q": query,
-        "num": REFERENCE_COUNT,
-    }
-    response = requests.get(
-        GOOGLE_SEARCH_ENDPOINT, params=params, timeout=DEFAULT_SEARCH_ENGINE_TIMEOUT
-    )
-    if not response.ok:
-        logger.error(f"{response.status_code} {response.text}")
-        raise HTTPException(response.status_code, "Search engine error.")
-    json_content = response.json()
-    try:
-        contexts = json_content["items"][:REFERENCE_COUNT]
-    except KeyError:
-        logger.error(f"Error encountered: {json_content}")
-        return []
-    return contexts
-
 
 def search_with_serper(query: str, subscription_key: str):
     """
@@ -198,95 +149,35 @@ def search_with_serper(query: str, subscription_key: str):
         logger.error(f"Error encountered: {json_content}")
         return []
 
-def search_with_searchapi(query: str, subscription_key: str):
+
+
+def local_search(query: str):
     """
-    Search with SearchApi.io and return the contexts.
+    Search with pathway local vector server and return the contexts.
     """
-    payload = {
-        "q": query,
-        "engine": "google",
-        "num": (
-            REFERENCE_COUNT
-            if REFERENCE_COUNT % 10 == 0
-            else (REFERENCE_COUNT // 10 + 1) * 10
-        ),
-    }
-    headers = {"Authorization": f"Bearer {subscription_key}", "Content-Type": "application/json"}
-    logger.info(
-        f"{payload} {headers} {subscription_key} {query} {SEARCHAPI_SEARCH_ENDPOINT}"
-    )
-    response = requests.get(
-        SEARCHAPI_SEARCH_ENDPOINT,
-        headers=headers,
-        params=payload,
-        timeout=30,
-    )
-    if not response.ok:
-        logger.error(f"{response.status_code} {response.text}")
-        raise HTTPException(response.status_code, "Search engine error.")
-    json_content = response.json()
+    
+    
     try:
-        # convert to the same format as bing/google
-        contexts = []
+        client = VectorStoreClient(
+            host="127.0.0.1",
+            port=PATHWAY_PORT,
+        )
 
-        if json_content.get("answer_box"):
-            if json_content["answer_box"].get("organic_result"):
-                title = json_content["answer_box"].get("organic_result").get("title", "")
-                url = json_content["answer_box"].get("organic_result").get("link", "")
-            if json_content["answer_box"].get("type") == "population_graph":
-                title = json_content["answer_box"].get("place", "")
-                url = json_content["answer_box"].get("explore_more_link", "")
-
-            title = json_content["answer_box"].get("title", "")
-            url = json_content["answer_box"].get("link")
-            snippet =  json_content["answer_box"].get("answer") or json_content["answer_box"].get("snippet")
-
-            if url and snippet:
-                contexts.append({
-                    "name": title,
-                    "url": url,
-                    "snippet": snippet
-                })
-
-        if json_content.get("knowledge_graph"):
-            if json_content["knowledge_graph"].get("source"):
-                url = json_content["knowledge_graph"].get("source").get("link", "")
-
-            url = json_content["knowledge_graph"].get("website", "")
-            snippet = json_content["knowledge_graph"].get("description")
-
-            if url and snippet:
-                contexts.append({
-                    "name": json_content["knowledge_graph"].get("title", ""),
-                    "url": url,
-                    "snippet": snippet
-                })
-
-        contexts += [
-            {"name": c["title"], "url": c["link"], "snippet": c.get("snippet", "")}
-            for c in json_content["organic_results"]
+        contexts = client(query, k = 20)
+        contexts  = [
+        { 
+            'title':doc['metadata']['path'].split('/')[-1], # file name
+            'url':doc['metadata']['url'],
+            'snippet':doc['text'],
+        }
+        for doc in contexts 
         ]
-        
-        if json_content.get("related_questions"):
-            for question in json_content["related_questions"]:
-                if question.get("source"):
-                    url = question.get("source").get("link", "")
-                else:
-                    url = ""  
-                    
-                snippet = question.get("answer", "")
-
-                if url and snippet:
-                    contexts.append({
-                        "name": question.get("question", ""),
-                        "url": url,
-                        "snippet": snippet
-                    })
 
         return contexts[:REFERENCE_COUNT]
-    except KeyError:
-        logger.error(f"Error encountered: {json_content}")
+    except Exception as e:
+        logger.error(f"Error encountered: {e}")
         return []
+    
 
 class RAG(Photon):
     """
@@ -311,15 +202,9 @@ class RAG(Photon):
         "resource_shape": "cpu.small",
         # You most likely don't need to change this.
         "env": {
-            # Choose the backend. Currently, we support BING and GOOGLE. For
-            # simplicity, in this demo, if you specify the backend as LEPTON,
-            # we will use the hosted serverless version of lepton search api
-            # at https://search-api.lepton.run/ to do the search and RAG, which
-            # runs the same code (slightly modified and might contain improvements)
-            # as this demo.
-            "BACKEND": "LEPTON",
-            # If you are using google, specify the search cx.
-            "GOOGLE_SEARCH_CX": "",
+            # Choose the backend. 
+            # Local backend is added.
+            "BACKEND": "LOCAL",
             # Specify the LLM model you are going to use.
             "LLM_MODEL": "mixtral-8x7b",
             # For all the search queries and results, we will use the Lepton KV to
@@ -334,16 +219,8 @@ class RAG(Photon):
         # Secrets you need to have: search api subscription key, and lepton
         # workspace token to query lepton's llama models.
         "secret": [
-            # If you use BING, you need to specify the subscription key. Otherwise
-            # it is not needed.
-            "BING_SEARCH_V7_SUBSCRIPTION_KEY",
-            # If you use GOOGLE, you need to specify the search api key. Note that
-            # you should also specify the cx in the env.
-            "GOOGLE_SEARCH_API_KEY",
             # If you use Serper, you need to specify the search api key.
             "SERPER_SEARCH_API_KEY",
-            # If you use SearchApi, you need to specify the search api key.
-            "SEARCHAPI_API_KEY",
             # You need to specify the workspace token to query lepton's LLM models.
             "LEPTON_WORKSPACE_TOKEN",
         ],
@@ -390,33 +267,18 @@ class RAG(Photon):
                 stream=True,
                 timeout=httpx.Timeout(connect=10, read=120, write=120, pool=10),
             )
-        elif self.backend == "BING":
-            self.search_api_key = os.environ["BING_SEARCH_V7_SUBSCRIPTION_KEY"]
-            self.search_function = lambda query: search_with_bing(
-                query,
-                self.search_api_key,
-            )
-        elif self.backend == "GOOGLE":
-            self.search_api_key = os.environ["GOOGLE_SEARCH_API_KEY"]
-            self.search_function = lambda query: search_with_google(
-                query,
-                self.search_api_key,
-                os.environ["GOOGLE_SEARCH_CX"],
-            )
+
+        elif self.backend == "LOCAL":
+            self.search_function = lambda query: local_search(query)
+
         elif self.backend == "SERPER":
             self.search_api_key = os.environ["SERPER_SEARCH_API_KEY"]
             self.search_function = lambda query: search_with_serper(
                 query,
                 self.search_api_key,
             )
-        elif self.backend == "SEARCHAPI":
-            self.search_api_key = os.environ["SEARCHAPI_API_KEY"]
-            self.search_function = lambda query: search_with_searchapi(
-                query,
-                self.search_api_key,
-            )
         else:
-            raise RuntimeError("Backend must be LEPTON, BING, GOOGLE, SERPER or SEARCHAPI.")
+            raise RuntimeError("Backend must be LEPTON, SERPER OR LOCAL")
         self.model = os.environ["LLM_MODEL"]
         # An executor to carry out async tasks, such as uploading to KV.
         self.executor = concurrent.futures.ThreadPoolExecutor(
@@ -592,7 +454,7 @@ class RAG(Photon):
 
         system_prompt = _rag_query_text.format(
             context="\n\n".join(
-                [f"[[citation:{i+1}]] {c['snippet']}" for i, c in enumerate(contexts)]
+                [f"[[citation:{i+1}]] (Earning Call for {c['title']}) {c['snippet']}" for i, c in enumerate(contexts)]
             )
         )
         try:
@@ -606,7 +468,7 @@ class RAG(Photon):
                 max_tokens=1024,
                 stop=stop_words,
                 stream=True,
-                temperature=0.9,
+                temperature=0.6,
             )
             if self.should_do_related_questions and generate_related_questions:
                 # While the answer is being generated, we can start generating

@@ -1,0 +1,9 @@
+langchain
+dspy-ai
+python-dotenv
+tqdm
+sentence_transformers
+leptonai
+pathway
+litellm
+unstructured[all-docs]

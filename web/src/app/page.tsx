@@ -12,8 +12,8 @@ export default function Home() {
         <Logo></Logo>
         <Search></Search>
         <div className="flex gap-2 flex-wrap justify-center">
-          <PresetQuery query="Who said live long and prosper?"></PresetQuery>
-          <PresetQuery query="Why do we only see one side of the moon?"></PresetQuery>
+          <PresetQuery query="what is the growth of Total assets for SNB ?"></PresetQuery>
+          <PresetQuery query="What was the growth in wholesale financing for Alrajhi Q4 2023?"></PresetQuery>
         </div>
         <Footer></Footer>
       </div>

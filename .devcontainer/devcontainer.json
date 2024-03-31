@@ -1,0 +1,19 @@
+{
+    "name": "local_perplexity",
+    // "build": {
+    //   "dockerfile": "./Dockerfile",
+    //   "context": ".."
+    // },
+    "hostRequirements": {
+      "cpus": 4
+    },
+    "waitFor": "onCreateCommand",
+    "updateContentCommand": "python3 -m pip install -r requirements.txt",
+    "postCreateCommand": "apt-get update && apt-get install ffmpeg libsm6 libxext6  -y",
+    "features": {
+      "ghcr.io/devcontainers-contrib/features/pipx-package:1": {},
+      "ghcr.io/devcontainers-contrib/features/poetry:2": {},
+      "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+      "ghcr.io/devcontainers/features/node:1": {}
+    }
+  }
